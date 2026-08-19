@@ -18,6 +18,8 @@ from app.schemas import (
     DecisionCreate,
     DecisionResponse,
     MeetingCreate,
+    MeetingAnalysisRequest,
+    MeetingAnalysisResponse,
     MeetingResponse,
     OpenQuestionCreate,
     OpenQuestionResponse,
@@ -25,6 +27,12 @@ from app.schemas import (
     ProjectResponse,
     RiskCreate,
     RiskResponse,
+)
+from app.services.meeting_analyzer import (
+    InvalidStructuredResponseError,
+    LLMAPIError,
+    MissingAPIKeyError,
+    analyze_transcript,
 )
 
 app = FastAPI(
@@ -45,6 +53,55 @@ def health():
     return {
         "status": "healthy",
     }
+
+
+@app.post(
+    "/analyze-meeting",
+    response_model=MeetingAnalysisResponse,
+)
+def analyze_meeting(
+    analysis_request: MeetingAnalysisRequest,
+    db: Session = Depends(get_db),
+):
+    project = (
+        db.query(Project)
+        .filter(Project.id == analysis_request.project_id)
+        .first()
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    meeting = (
+        db.query(Meeting)
+        .filter(Meeting.id == analysis_request.meeting_id)
+        .first()
+    )
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if meeting.project_id != analysis_request.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Meeting does not belong to this project",
+        )
+
+    try:
+        return analyze_transcript(analysis_request.transcript)
+    except MissingAPIKeyError:
+        raise HTTPException(
+            status_code=500,
+            detail="Meeting analysis is not configured",
+        )
+    except LLMAPIError:
+        raise HTTPException(
+            status_code=502,
+            detail="Meeting analysis service is unavailable",
+        )
+    except InvalidStructuredResponseError:
+        raise HTTPException(
+            status_code=502,
+            detail="Meeting analysis returned an invalid response",
+        )
 
 
 @app.get("/db-health")
